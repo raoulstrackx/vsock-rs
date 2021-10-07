@@ -1,6 +1,6 @@
 [package]
 name = "vsock"
-version = "0.2.4"
+version = "0.2.5"
 authors = ["fsyncd", "rust-vsock"]
 description = "Virtio socket support for Rust"
 repository = "https://github.com/rust-vsock/vsock-rs"
@@ -11,9 +11,13 @@ edition = "2018"
 exclude = ["test_fixture"]
 
 [dependencies]
-libc = "0.2.79"
-nix = "0.22.1"
+libc = { version = "0.2.79", default-features = false, features = ["rustc-std-workspace-core"] }
+nix = { version = "0.22.1", optional = true }
 
 [dev-dependencies]
 rand = "0.8.3"
 sha2 = ">=0.8.0"
+
+[features]
+default = ["std"]
+std = ["libc/std", "nix"]
