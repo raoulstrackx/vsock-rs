@@ -15,89 +15,193 @@
  * limitations under the License.
  */
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
 //! Virtio socket support for Rust.
 
+use core::mem;
+#[cfg(feature="std")]
+use core::convert::TryFrom;
+use core::marker::PhantomData;
+use core::time::Duration;
 use libc::*;
-use nix::ioctl_read_bad;
-use std::ffi::c_void;
-use std::fs::File;
-use std::io::{Error, ErrorKind, Read, Result, Write};
-use std::mem::{self, size_of};
-use std::net::Shutdown;
-use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
-use std::time::Duration;
-
+#[cfg(not(feature="std"))]
+use libc::c_int as RawFd;
 pub use libc::{VMADDR_CID_ANY, VMADDR_CID_HOST, VMADDR_CID_HYPERVISOR, VMADDR_CID_LOCAL};
-pub use nix::sys::socket::{SockAddr, VsockAddr};
+#[cfg(feature="std")]
+use nix::ioctl_read_bad;
+#[cfg(feature="std")]
+use nix::sys::socket::{SockAddr as NixSockAddr, VsockAddr as NixVsockAddr};
+#[cfg(feature="std")]
+use std::fs::File;
+#[cfg(feature="std")]
+use std::io::{self, ErrorKind, Read, Write};
+#[cfg(feature="std")]
+pub use std::net::Shutdown;
+#[cfg(feature="std")]
+use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+
+#[cfg(not(feature="std"))]
+pub enum Shutdown {
+    Read,
+    Write,
+    Both,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Error {
+    SystemError(i32),
+    WrongAddressType,
+    ZeroDurationTimeout,
+}
+
+#[cfg(feature="std")]
+impl From<Error> for io::Error {
+    fn from(err: Error) -> io::Error {
+        match err {
+            Error::SystemError(errno) => io::Error::from_raw_os_error(errno),
+            Error::WrongAddressType => io::Error::new(
+                ErrorKind::InvalidInput,
+                "Wrong address type provided"
+            ),
+            Error::ZeroDurationTimeout => io::Error::new(
+                ErrorKind::InvalidInput,
+                "cannot set a zero duration timeout"
+            ),
+        }
+    }
+}
+
+pub trait Platform {
+    fn last_os_error() -> Error;
+}
+
+#[cfg(feature="std")]
+pub struct Std;
+
+#[cfg(feature="std")]
+impl Platform for Std {
+    fn last_os_error() -> Error {
+        let errno = io::Error::last_os_error().raw_os_error().expect("Error from OS");
+        Error::SystemError(errno)
+    }
+}
+
+pub struct SockAddr(libc::sockaddr_vm);
+
+#[cfg(feature="std")]
+impl From<SockAddr> for NixSockAddr {
+    fn from(addr: SockAddr) -> NixSockAddr {
+        NixSockAddr::Vsock(NixVsockAddr(addr.0))
+    }
+}
+
+#[cfg(feature="std")]
+impl TryFrom<NixSockAddr> for SockAddr {
+    type Error = ();
+
+    fn try_from(addr: NixSockAddr) -> Result<SockAddr, ()> {
+        if let NixSockAddr::Vsock(addr) = addr {
+            Ok(SockAddr(addr.0))
+        } else {
+            Err(())
+        }
+    }
+}
 
 fn new_socket() -> libc::c_int {
     unsafe { socket(AF_VSOCK, SOCK_STREAM | SOCK_CLOEXEC, 0) }
 }
 
-/// An iterator that infinitely accepts connections on a VsockListener.
-#[derive(Debug)]
-pub struct Incoming<'a> {
-    listener: &'a VsockListener,
+fn new_socket_addr(cid: u32, port: u32) -> libc::sockaddr_vm {
+    let mut vsock_addr: libc::sockaddr_vm = unsafe { mem::zeroed() };
+    vsock_addr.svm_family = libc::AF_VSOCK as _;
+    vsock_addr.svm_cid = cid;
+    vsock_addr.svm_port = port;
+    vsock_addr
 }
 
-impl<'a> Iterator for Incoming<'a> {
-    type Item = Result<VsockStream>;
+/// An iterator that infinitely accepts connections on a VsockListener.
+#[cfg(feature="std")]
+#[derive(Debug)]
+pub struct Incoming<'a, P: Platform = Std> {
+    listener: &'a VsockListener<P>,
+}
 
-    fn next(&mut self) -> Option<Result<VsockStream>> {
+#[cfg(not(feature="std"))]
+#[derive(Debug)]
+pub struct Incoming<'a, P: Platform> {
+    listener: &'a VsockListener<P>,
+}
+
+impl<'a, P: Platform> Iterator for Incoming<'a, P> {
+    type Item = Result<VsockStream<P>, Error>;
+
+    fn next(&mut self) -> Option<Result<VsockStream<P>, Error>> {
         Some(self.listener.accept().map(|p| p.0))
     }
 }
 
 /// A virtio socket server, listening for connections.
 #[derive(Debug, Clone)]
-pub struct VsockListener {
+#[cfg(feature="std")]
+pub struct VsockListener<P: Platform = Std> {
     socket: RawFd,
+    phantom: PhantomData<P>,
 }
 
-impl VsockListener {
-    /// Create a new VsockListener which is bound and listening on the socket address.
-    pub fn bind(addr: &SockAddr) -> Result<VsockListener> {
-        let mut vsock_addr = if let SockAddr::Vsock(addr) = addr {
-            addr.0
-        } else {
-            return Err(Error::new(
-                ErrorKind::Other,
-                "requires a virtio socket address",
-            ));
-        };
+/// A virtio socket server, listening for connections.
+#[derive(Debug, Clone)]
+#[cfg(not(feature="std"))]
+pub struct VsockListener<P: Platform> {
+    socket: RawFd,
+    phantom: PhantomData<P>,
+}
 
+#[cfg(feature="std")]
+impl VsockListener<Std> {
+    /// Create a new VsockListener which is bound and listening on the socket address.
+    pub fn bind(addr: &NixSockAddr) -> Result<VsockListener<Std>, Error> {
+        if let NixSockAddr::Vsock(addr) = addr {
+            Self::bind_with_cid_port(addr.cid(), addr.port())
+        } else {
+            Err(Error::WrongAddressType)
+        }
+    }
+}
+
+impl<P: Platform> VsockListener<P> {
+    /// Create a new VsockListener with specified cid and port.
+    pub fn bind_with_cid_port(cid: u32, port: u32) -> Result<VsockListener<P>, Error> {
         let socket = new_socket();
         if socket < 0 {
-            return Err(Error::last_os_error());
+            return Err(P::last_os_error());
         }
+
+        let mut vsock_addr = new_socket_addr(cid, port);
 
         let res = unsafe {
             bind(
                 socket,
                 &mut vsock_addr as *mut _ as *mut sockaddr,
-                size_of::<sockaddr_vm>() as socklen_t,
+                mem::size_of::<sockaddr_vm>() as socklen_t,
             )
         };
         if res < 0 {
-            return Err(Error::last_os_error());
+            return Err(P::last_os_error());
         }
 
         // rust stdlib uses a 128 connection backlog
         let res = unsafe { listen(socket, 128) };
         if res < 0 {
-            return Err(Error::last_os_error());
+            return Err(P::last_os_error());
         }
 
-        Ok(Self { socket })
-    }
-
-    /// Create a new VsockListener with specified cid and port.
-    pub fn bind_with_cid_port(cid: u32, port: u32) -> Result<VsockListener> {
-        Self::bind(&SockAddr::Vsock(VsockAddr::new(cid, port)))
+        Ok(Self { socket, phantom: PhantomData::<P>::default()})
     }
 
     /// The local socket address of the listener.
-    pub fn local_addr(&self) -> Result<SockAddr> {
+    pub fn local_addr(&self) -> Result<SockAddr, Error> {
         let mut vsock_addr = sockaddr_vm {
             svm_family: AF_VSOCK as sa_family_t,
             svm_reserved1: 0,
@@ -105,7 +209,7 @@ impl VsockListener {
             svm_cid: 0,
             svm_zero: [0u8; 4],
         };
-        let mut vsock_addr_len = size_of::<sockaddr_vm>() as socklen_t;
+        let mut vsock_addr_len = mem::size_of::<sockaddr_vm>() as socklen_t;
         if unsafe {
             getsockname(
                 self.socket,
@@ -114,19 +218,22 @@ impl VsockListener {
             )
         } < 0
         {
-            Err(Error::last_os_error())
+            Err(P::last_os_error())
         } else {
-            Ok(SockAddr::Vsock(VsockAddr(vsock_addr)))
+            Ok(SockAddr(vsock_addr))
         }
     }
 
     /// Create a new independently owned handle to the underlying socket.
-    pub fn try_clone(&self) -> Result<Self> {
-        Ok(self.clone())
+    pub fn try_clone(&self) -> Result<VsockListener<P>, Error> {
+        Ok(VsockListener {
+            socket: self.socket.clone(),
+            phantom: PhantomData::default(),
+        })
     }
 
     /// Accept a new incoming connection from this listener.
-    pub fn accept(&self) -> Result<(VsockStream, SockAddr)> {
+    pub fn accept(&self) -> Result<(VsockStream<P>, SockAddr), Error> {
         let mut vsock_addr = sockaddr_vm {
             svm_family: AF_VSOCK as sa_family_t,
             svm_reserved1: 0,
@@ -134,7 +241,7 @@ impl VsockListener {
             svm_cid: 0,
             svm_zero: [0u8; 4],
         };
-        let mut vsock_addr_len = size_of::<sockaddr_vm>() as socklen_t;
+        let mut vsock_addr_len = mem::size_of::<sockaddr_vm>() as socklen_t;
         let socket = unsafe {
             accept4(
                 self.socket,
@@ -144,22 +251,22 @@ impl VsockListener {
             )
         };
         if socket < 0 {
-            Err(Error::last_os_error())
+            Err(<P as Platform>::last_os_error())
         } else {
             Ok((
                 unsafe { VsockStream::from_raw_fd(socket as RawFd) },
-                SockAddr::Vsock(VsockAddr::new(vsock_addr.svm_cid, vsock_addr.svm_port)),
+                SockAddr(vsock_addr)
             ))
         }
     }
 
     /// An iterator over the connections being received on this listener.
-    pub fn incoming(&self) -> Incoming {
-        Incoming { listener: self }
+    pub fn incoming(&self) -> Incoming<P> {
+        Incoming::<P> { listener: self }
     }
 
     /// Retrieve the latest error associated with the underlying socket.
-    pub fn take_error(&self) -> Result<Option<Error>> {
+    pub fn take_error(&self) -> Result<Option<Error>, Error> {
         let mut error: i32 = 0;
         let mut error_len: socklen_t = 0;
         if unsafe {
@@ -172,39 +279,41 @@ impl VsockListener {
             )
         } < 0
         {
-            Err(Error::last_os_error())
+            Err(P::last_os_error())
         } else {
             Ok(if error == 0 {
                 None
             } else {
-                Some(Error::from_raw_os_error(error))
+                Some(Error::SystemError(error))
             })
         }
     }
 
     /// Move this stream in and out of nonblocking mode.
-    pub fn set_nonblocking(&self, nonblocking: bool) -> Result<()> {
+    pub fn set_nonblocking(&self, nonblocking: bool) -> Result<(), Error> {
         let mut nonblocking: i32 = if nonblocking { 1 } else { 0 };
         if unsafe { ioctl(self.socket, FIONBIO, &mut nonblocking) } < 0 {
-            Err(Error::last_os_error())
+            Err(<P as Platform>::last_os_error())
         } else {
             Ok(())
         }
     }
 }
-
+#[cfg(feature="std")]
 impl AsRawFd for VsockListener {
     fn as_raw_fd(&self) -> RawFd {
         self.socket
     }
 }
 
+#[cfg(feature="std")]
 impl FromRawFd for VsockListener {
     unsafe fn from_raw_fd(socket: RawFd) -> Self {
-        Self { socket }
+        Self { socket, phantom: PhantomData::default() }
     }
 }
 
+#[cfg(feature="std")]
 impl IntoRawFd for VsockListener {
     fn into_raw_fd(self) -> RawFd {
         let fd = self.socket;
@@ -213,7 +322,7 @@ impl IntoRawFd for VsockListener {
     }
 }
 
-impl Drop for VsockListener {
+impl<P: Platform> Drop for VsockListener<P> {
     fn drop(&mut self) {
         unsafe { close(self.socket) };
     }
@@ -221,47 +330,71 @@ impl Drop for VsockListener {
 
 /// A virtio stream between a local and a remote socket.
 #[derive(Debug, Clone)]
-pub struct VsockStream {
+#[cfg(feature="std")]
+pub struct VsockStream<P: Platform = Std> {
     socket: RawFd,
+    phantom: PhantomData<P>,
 }
 
-impl VsockStream {
-    /// Open a connection to a remote host.
-    pub fn connect(addr: &SockAddr) -> Result<Self> {
-        let vsock_addr = if let SockAddr::Vsock(addr) = addr {
-            addr.0
-        } else {
-            return Err(Error::new(
-                ErrorKind::Other,
-                "requires a virtio socket address",
-            ));
-        };
+/// A virtio stream between a local and a remote socket.
+#[derive(Debug, Clone)]
+#[cfg(not(feature="std"))]
+pub struct VsockStream<P: Platform> {
+    socket: RawFd,
+    phantom: PhantomData<P>,
+}
 
+impl<P: Platform> VsockStream<P> {
+    /// The `FromRawFd` trait isn't available in a `no_std` environment. We mimic
+    /// its existance here and make it `unsafe` to avoid compiler warnings
+    pub unsafe fn from_raw_fd(socket: RawFd) -> Self {
+        Self { socket, phantom: PhantomData::default() }
+    }
+
+    pub fn into_raw_fd(self) -> RawFd {
+        let fd = self.socket;
+        mem::forget(self);
+        fd
+    }
+
+    /// Open a connection to a remote host.
+    pub fn connect(addr: &SockAddr) -> Result<Self, Error> {
+        Self::connect_with_socket_addr(&addr.0)
+    }
+    
+    #[cfg(feature="std")]
+    pub fn connect_with_vsock_addr(vsock_addr: &NixVsockAddr) -> Result<Self, Error> {
+        Self::connect_with_socket_addr(&vsock_addr.0)
+    }
+
+    /// Open a connection to a remote host.
+    pub fn connect_with_socket_addr(vsock_addr: &libc::sockaddr_vm) -> Result<Self, Error> {
         let sock = new_socket();
         if sock < 0 {
-            return Err(Error::last_os_error());
+            return Err(<P as Platform>::last_os_error());
         }
         if unsafe {
             connect(
                 sock,
-                &vsock_addr as *const _ as *const sockaddr,
-                size_of::<sockaddr_vm>() as socklen_t,
+                vsock_addr as *const _ as *const sockaddr,
+                mem::size_of::<sockaddr_vm>() as socklen_t,
             )
         } < 0
         {
-            Err(Error::last_os_error())
+            Err(<P as Platform>::last_os_error())
         } else {
             Ok(unsafe { VsockStream::from_raw_fd(sock) })
         }
     }
 
     /// Open a connection to a remote host with specified cid and port.
-    pub fn connect_with_cid_port(cid: u32, port: u32) -> Result<Self> {
-        Self::connect(&SockAddr::Vsock(VsockAddr::new(cid, port)))
+    pub fn connect_with_cid_port(cid: u32, port: u32) -> Result<Self, Error> {
+        let vsock_addr = new_socket_addr(cid, port);
+        Self::connect_with_socket_addr(&vsock_addr)
     }
 
     /// Virtio socket address of the remote peer associated with this connection.
-    pub fn peer_addr(&self) -> Result<SockAddr> {
+    pub fn peer_addr(&self) -> Result<SockAddr, Error> {
         let mut vsock_addr = sockaddr_vm {
             svm_family: AF_VSOCK as sa_family_t,
             svm_reserved1: 0,
@@ -269,7 +402,7 @@ impl VsockStream {
             svm_cid: 0,
             svm_zero: [0u8; 4],
         };
-        let mut vsock_addr_len = size_of::<sockaddr_vm>() as socklen_t;
+        let mut vsock_addr_len = mem::size_of::<sockaddr_vm>() as socklen_t;
         if unsafe {
             getpeername(
                 self.socket,
@@ -278,14 +411,14 @@ impl VsockStream {
             )
         } < 0
         {
-            Err(Error::last_os_error())
+            Err(<P as Platform>::last_os_error())
         } else {
-            Ok(SockAddr::Vsock(VsockAddr(vsock_addr)))
+            Ok(SockAddr(vsock_addr))
         }
     }
 
     /// Virtio socket address of the local address associated with this connection.
-    pub fn local_addr(&self) -> Result<SockAddr> {
+    pub fn local_addr(&self) -> Result<SockAddr, Error> {
         let mut vsock_addr = sockaddr_vm {
             svm_family: AF_VSOCK as sa_family_t,
             svm_reserved1: 0,
@@ -293,7 +426,7 @@ impl VsockStream {
             svm_cid: 0,
             svm_zero: [0u8; 4],
         };
-        let mut vsock_addr_len = size_of::<sockaddr_vm>() as socklen_t;
+        let mut vsock_addr_len = mem::size_of::<sockaddr_vm>() as socklen_t;
         if unsafe {
             getsockname(
                 self.socket,
@@ -302,33 +435,36 @@ impl VsockStream {
             )
         } < 0
         {
-            Err(Error::last_os_error())
+            Err(<P as Platform>::last_os_error())
         } else {
-            Ok(SockAddr::Vsock(VsockAddr(vsock_addr)))
+            Ok(SockAddr(vsock_addr))
         }
     }
 
     /// Shutdown the read, write, or both halves of this connection.
-    pub fn shutdown(&self, how: Shutdown) -> Result<()> {
+    pub fn shutdown(&self, how: Shutdown) -> Result<(), Error> {
         let how = match how {
             Shutdown::Write => SHUT_WR,
             Shutdown::Read => SHUT_RD,
             Shutdown::Both => SHUT_RDWR,
         };
         if unsafe { shutdown(self.socket, how) } < 0 {
-            Err(Error::last_os_error())
+            Err(<P as Platform>::last_os_error())
         } else {
             Ok(())
         }
     }
 
     /// Create a new independently owned handle to the underlying socket.
-    pub fn try_clone(&self) -> Result<Self> {
-        Ok(self.clone())
+    pub fn try_clone(&self) -> Result<Self, Error> {
+        Ok(VsockStream {
+            socket: self.socket.clone(),
+            phantom: PhantomData::default() 
+        })
     }
 
     /// Set the timeout on read operations.
-    pub fn set_read_timeout(&self, dur: Option<Duration>) -> Result<()> {
+    pub fn set_read_timeout(&self, dur: Option<Duration>) -> Result<(), Error> {
         let timeout = Self::timeval_from_duration(dur)?;
         if unsafe {
             setsockopt(
@@ -336,18 +472,18 @@ impl VsockStream {
                 SOL_SOCKET,
                 SO_SNDTIMEO,
                 &timeout as *const _ as *const c_void,
-                size_of::<timeval>() as socklen_t,
+                mem::size_of::<timeval>() as socklen_t,
             )
         } < 0
         {
-            Err(Error::last_os_error())
+            Err(<P as Platform>::last_os_error())
         } else {
             Ok(())
         }
     }
 
     /// Set the timeout on write operations.
-    pub fn set_write_timeout(&self, dur: Option<Duration>) -> Result<()> {
+    pub fn set_write_timeout(&self, dur: Option<Duration>) -> Result<(), Error> {
         let timeout = Self::timeval_from_duration(dur)?;
         if unsafe {
             setsockopt(
@@ -355,18 +491,18 @@ impl VsockStream {
                 SOL_SOCKET,
                 SO_RCVTIMEO,
                 &timeout as *const _ as *const c_void,
-                size_of::<timeval>() as socklen_t,
+                mem::size_of::<timeval>() as socklen_t,
             )
         } < 0
         {
-            Err(Error::last_os_error())
+            Err(<P as Platform>::last_os_error())
         } else {
             Ok(())
         }
     }
 
     /// Retrieve the latest error associated with the underlying socket.
-    pub fn take_error(&self) -> Result<Option<Error>> {
+    pub fn take_error(&self) -> Result<Option<Error>, Error> {
         let mut error: i32 = 0;
         let mut error_len: socklen_t = 0;
         if unsafe {
@@ -379,34 +515,31 @@ impl VsockStream {
             )
         } < 0
         {
-            Err(Error::last_os_error())
+            Err(<P as Platform>::last_os_error())
         } else {
             Ok(if error == 0 {
                 None
             } else {
-                Some(Error::from_raw_os_error(error))
+                Some(Error::SystemError(error))
             })
         }
     }
 
     /// Move this stream in and out of nonblocking mode.
-    pub fn set_nonblocking(&self, nonblocking: bool) -> Result<()> {
+    pub fn set_nonblocking(&self, nonblocking: bool) -> Result<(), Error> {
         let mut nonblocking: i32 = if nonblocking { 1 } else { 0 };
         if unsafe { ioctl(self.socket, FIONBIO, &mut nonblocking) } < 0 {
-            Err(Error::last_os_error())
+            Err(<P as Platform>::last_os_error())
         } else {
             Ok(())
         }
     }
 
-    fn timeval_from_duration(dur: Option<Duration>) -> Result<timeval> {
+    fn timeval_from_duration(dur: Option<Duration>) -> Result<timeval, Error> {
         match dur {
             Some(dur) => {
                 if dur.as_secs() == 0 && dur.subsec_nanos() == 0 {
-                    return Err(Error::new(
-                        ErrorKind::InvalidInput,
-                        "cannot set a zero duration timeout",
-                    ));
+                    return Err(Error::ZeroDurationTimeout);
                 }
 
                 // https://github.com/rust-lang/libc/issues/1848
@@ -431,37 +564,17 @@ impl VsockStream {
             }),
         }
     }
-}
 
-impl Read for VsockStream {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        <&Self>::read(&mut &*self, buf)
-    }
-}
-
-impl Write for VsockStream {
-    fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        <&Self>::write(&mut &*self, buf)
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        Ok(())
-    }
-}
-
-impl Read for &VsockStream {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+    pub fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
         let ret = unsafe { recv(self.socket, buf.as_mut_ptr() as *mut c_void, buf.len(), 0) };
         if ret < 0 {
-            Err(Error::last_os_error())
+            Err(<P as Platform>::last_os_error())
         } else {
             Ok(ret as usize)
         }
     }
-}
 
-impl Write for &VsockStream {
-    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+    pub fn write(&self, buf: &[u8]) -> Result<usize, Error> {
         let ret = unsafe {
             send(
                 self.socket,
@@ -471,44 +584,87 @@ impl Write for &VsockStream {
             )
         };
         if ret < 0 {
-            Err(Error::last_os_error())
+            Err(<P as Platform>::last_os_error())
         } else {
             Ok(ret as usize)
         }
     }
 
-    fn flush(&mut self) -> Result<()> {
+    pub fn flush() -> Result<(), Error> {
         Ok(())
     }
 }
 
+#[cfg(feature="std")]
+impl Read for VsockStream<Std> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
+        <&Self>::read(&mut &*self, buf).into()
+    }
+}
+
+#[cfg(feature="std")]
+impl Write for VsockStream<Std> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
+        <&Self>::write(&mut &*self, buf).into()
+    }
+
+    fn flush(&mut self) -> Result<(), io::Error> {
+        Ok(())
+    }
+}
+
+#[cfg(feature="std")]
+impl Read for &VsockStream<Std> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, io::Error> {
+        VsockStream::<Std>::read(self, buf)
+            .map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature="std")]
+impl Write for &VsockStream<Std> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, io::Error> {
+        VsockStream::<Std>::write(self, buf)
+            .map_err(|e| e.into())
+    }
+
+    fn flush(&mut self) -> Result<(), io::Error> {
+        VsockStream::<Std>::flush()
+            .map_err(|e| e.into())
+    }
+}
+
+#[cfg(feature="std")]
 impl AsRawFd for VsockStream {
     fn as_raw_fd(&self) -> RawFd {
         self.socket
     }
 }
 
+#[cfg(feature="std")]
 impl FromRawFd for VsockStream {
     unsafe fn from_raw_fd(socket: RawFd) -> Self {
-        Self { socket }
+        VsockStream::from_raw_fd(socket)
     }
 }
 
+#[cfg(feature="std")]
 impl IntoRawFd for VsockStream {
     fn into_raw_fd(self) -> RawFd {
-        let fd = self.socket;
-        mem::forget(self);
-        fd
+        VsockStream::into_raw_fd(self)
     }
 }
 
-impl Drop for VsockStream {
+impl<P: Platform> Drop for VsockStream<P> {
     fn drop(&mut self) {
         unsafe { close(self.socket) };
     }
 }
 
+
+#[cfg(feature="std")]
 const IOCTL_VM_SOCKETS_GET_LOCAL_CID: usize = 0x7b9;
+#[cfg(feature="std")]
 ioctl_read_bad!(
     vm_sockets_get_local_cid,
     IOCTL_VM_SOCKETS_GET_LOCAL_CID,
@@ -519,7 +675,8 @@ ioctl_read_bad!(
 ///
 /// Note that when calling [`VsockListener::bind`], you should generally use [`VMADDR_CID_ANY`]
 /// instead, and for making a loopback connection you should use [`VMADDR_CID_LOCAL`].
-pub fn get_local_cid() -> Result<u32> {
+#[cfg(feature="std")]
+pub fn get_local_cid() -> Result<u32, io::Error> {
     let f = File::open("/dev/vsock")?;
     let mut cid = 0;
     // SAFETY: the kernel only modifies the given u32 integer.
