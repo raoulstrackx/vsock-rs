@@ -731,3 +731,15 @@ pub fn get_local_cid() -> Result<u32, io::Error> {
     unsafe { vm_sockets_get_local_cid(f.as_raw_fd(), &mut cid) }?;
     Ok(cid)
 }
+
+#[test]
+#[cfg(feature="random_port")]
+fn rand_ports() {
+    let mut ports = Vec::new();
+    for _i in 0..1000 {
+        let port = VsockListener::<Std>::gen_rand_port().unwrap();
+        assert!(MAX_PRIVILEGED_PORT < port);
+        assert!(ports.iter().all(|p| *p != port));
+        ports.push(port);
+    }
+}
