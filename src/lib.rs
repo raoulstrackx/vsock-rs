@@ -20,6 +20,8 @@
 use core::mem;
 use core::marker::PhantomData;
 use core::time::Duration;
+#[cfg(feature="random_port")]
+use getrandom::Error as GetRandomError;
 use libc::*;
 #[cfg(not(feature="std"))]
 use libc::c_int as RawFd;
@@ -36,6 +38,9 @@ use std::io::{self, ErrorKind, Read, Write};
 pub use std::net::Shutdown;
 #[cfg(feature="std")]
 use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
+
+const MAX_PRIVILEGED_PORT: u32 = 1023;
+const BIND_RETRIES: u32 = 10;
 
 #[cfg(not(feature="std"))]
 pub enum Shutdown {
@@ -54,6 +59,9 @@ pub trait PlatformError {
     fn last_os_error() -> Self;
 
     fn from_vsock_error(error: &VsockError) -> Self;
+
+    #[cfg(feature="random_port")]
+    fn from_getrandom_error(error: GetRandomError) -> Self;
 }
 
 pub trait Platform {
@@ -84,6 +92,18 @@ impl PlatformError for io::Error {
                         ErrorKind::InvalidInput,
                         "cannot set a zero duration timeout",
                     ),
+        }
+    }
+
+    #[cfg(feature="random_port")]
+    fn from_getrandom_error(error: GetRandomError) -> Self {
+        if let Some(raw_os_err) = error.raw_os_error() {
+            io::Error::from_raw_os_error(raw_os_err)
+        } else {
+            io::Error::new(
+                ErrorKind::Other,
+                error
+            )
         }
     }
 }
@@ -201,6 +221,33 @@ impl<P: Platform> VsockListener<P> {
         }
 
         Ok(Self { socket, phantom: PhantomData::<P>::default()})
+    }
+
+    #[cfg(feature="random_port")]
+    fn gen_rand_port() -> Result<u32, <P as Platform>::Error> {
+        let mut buf = [0u8; 4];
+        getrandom::getrandom(&mut buf).map_err(|e| <P as Platform>::Error::from_getrandom_error(e))?;
+        let port = u32::from_le_bytes(buf);
+        if port <= MAX_PRIVILEGED_PORT {
+            Self::gen_rand_port()
+        } else {
+            Ok(port)
+        }
+    }
+
+    /// Create a new VsockListener with specified cid and random port.
+    #[cfg(feature="random_port")]
+    pub fn bind_with_cid(cid: u32) -> Result<VsockListener<P>, <P as Platform>::Error> {
+        fn bind_with_cid_ex<P: Platform>(cid: u32, retries: u32) -> Result<VsockListener<P>, <P as Platform>::Error> {
+            let listener = VsockListener::<P>::gen_rand_port().
+                                and_then(|port| VsockListener::<P>::bind_with_cid_port(cid, port));
+            match listener {
+                Ok(listener)           => Ok(listener),
+                Err(e) if retries == 0 => Err(e),
+                Err(_e)                => bind_with_cid_ex(cid, retries - 1),
+            }
+        }
+        bind_with_cid_ex(cid, BIND_RETRIES)
     }
 
     /// The local socket address of the listener.

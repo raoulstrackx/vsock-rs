@@ -13,6 +13,7 @@ exclude = ["test_fixture"]
 [dependencies]
 libc = { version = "0.2.79", default-features = false, features = ["rustc-std-workspace-core"] }
 nix = { version = "0.22.1", optional = true }
+getrandom = { version = "0.2.3", optional = true }
 
 [dev-dependencies]
 rand = "0.8.3"
@@ -21,5 +22,6 @@ serde_cbor = "0.11.2"
 serde = { version = "1.0", features = ["derive"] }
 
 [features]
-default = ["std"]
+default = ["std", "random_port"]
+random_port = ["getrandom"]
 std = ["libc/std", "nix"]
