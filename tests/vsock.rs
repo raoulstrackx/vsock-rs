@@ -15,8 +15,12 @@
  */
 
 use rand::RngCore;
+use serde::{Serialize, Deserialize};
 use sha2::{Digest, Sha256};
-use vsock::{get_local_cid, Std, SockAddr, VsockAddr, VsockStream, VMADDR_CID_HOST};
+use std::time::Duration;
+use std::thread::{self, JoinHandle};
+use std::io::Write;
+use vsock::{get_local_cid, Std, SockAddr, VsockAddr, VsockListener, VsockStream, VMADDR_CID_HOST, VMADDR_CID_LOCAL};
 
 const TEST_BLOB_SIZE: usize = 1_000_000;
 const TEST_BLOCK_SIZE: usize = 5_000;
@@ -70,4 +74,70 @@ fn test_vsock() {
 #[test]
 fn test_get_local_cid() {
     assert_eq!(get_local_cid().unwrap(), VMADDR_CID_HOST);
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Request {
+    message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct Response {
+    message: String,
+}
+
+fn handle_connection(stream: &mut VsockStream) {
+    let mut buff = [0u8; 100];
+    let n = stream.read(&mut buff).unwrap();
+    let req: Request = serde_cbor::from_slice(&buff[0..n]).unwrap();
+    let resp = Response {
+        message: req.message.clone().to_uppercase(),
+    };
+    stream.write_all(&serde_cbor::ser::to_vec(&resp).expect("serialization error")).unwrap();
+}
+
+fn start_server(port: u32) -> (JoinHandle<()>, u32) {
+    let listener = VsockListener::bind_with_cid_port(VMADDR_CID_LOCAL, port).unwrap();
+    let port = if let SockAddr::Vsock(vsock) = listener.local_addr().unwrap() {
+        vsock.port()
+    } else {
+        panic!("Not vsock port");
+    };
+
+    let handle = thread::Builder::new().spawn(move || {
+        let listener = listener;
+        loop {
+            let (stream, _addr) = listener.accept().unwrap();
+            let _ = thread::Builder::new()
+                .spawn(move || {
+                    let mut stream = stream;
+                    handle_connection(&mut stream);
+                });
+        }
+    }).unwrap();
+    (handle, port)
+}
+
+fn test_connection(port: u32) {
+    let mut client = VsockStream::<Std>::connect_with_cid_port(VMADDR_CID_LOCAL, port).unwrap();
+    let req = Request {
+        message: "Hello world!".to_string(),
+    };
+    client.write_all(&serde_cbor::ser::to_vec(&req).unwrap()).unwrap();
+    let mut buff = [0u8; 100];
+    let n = client.read(&mut buff).unwrap();
+    let resp: Response = serde_cbor::from_slice(&buff[0..n]).unwrap();
+    println!("send: {:?}", req);
+    println!("received: {:?}", resp);
+    assert_eq!(resp, Response { message: req.message.to_uppercase() });
+}
+
+#[test]
+fn test_loopback() {
+    let (_server_thread, port) = start_server(3000);
+    // Wait until server started
+    std::thread::sleep(Duration::from_millis(500));
+    test_connection(port);
+    test_connection(port);
+    test_connection(port);
 }
