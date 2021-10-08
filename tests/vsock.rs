@@ -96,8 +96,12 @@ fn handle_connection(stream: &mut VsockStream) {
     stream.write_all(&serde_cbor::ser::to_vec(&resp).expect("serialization error")).unwrap();
 }
 
-fn start_server(port: u32) -> (JoinHandle<()>, u32) {
-    let listener = VsockListener::bind_with_cid_port(VMADDR_CID_LOCAL, port).unwrap();
+fn start_server(port: Option<u32>) -> (JoinHandle<()>, u32) {
+    let listener = if let Some(port) = port {
+            VsockListener::bind_with_cid_port(VMADDR_CID_LOCAL, port).unwrap()
+        } else {
+            VsockListener::bind_with_cid(VMADDR_CID_LOCAL).unwrap()
+        };
     let port = if let SockAddr::Vsock(vsock) = listener.local_addr().unwrap() {
         vsock.port()
     } else {
@@ -134,10 +138,22 @@ fn test_connection(port: u32) {
 
 #[test]
 fn test_loopback() {
-    let (_server_thread, port) = start_server(3000);
+    let (_server_thread, port) = start_server(Some(3000));
     // Wait until server started
     std::thread::sleep(Duration::from_millis(500));
     test_connection(port);
     test_connection(port);
     test_connection(port);
+}
+
+#[test]
+fn test_loopback_rand_port() {
+    let (_server_thread, port0) = start_server(None);
+    let (_server_thread, port1) = start_server(None);
+    let (_server_thread, port2) = start_server(None);
+    // Wait until server started
+    std::thread::sleep(Duration::from_millis(500));
+    test_connection(port0);
+    test_connection(port1);
+    test_connection(port2);
 }
