@@ -138,7 +138,7 @@ fn test_connection(port: u32) {
 
 #[test]
 fn test_loopback() {
-    let (_server_thread, port) = start_server(Some(3000));
+    let (_server_thread, port) = start_server(Some(0));
     // Wait until server started
     std::thread::sleep(Duration::from_millis(500));
     test_connection(port);
@@ -148,9 +148,9 @@ fn test_loopback() {
 
 #[test]
 fn test_loopback_rand_port() {
-    let (_server_thread, port0) = start_server(None);
-    let (_server_thread, port1) = start_server(None);
-    let (_server_thread, port2) = start_server(None);
+    let (_server_thread, port0) = start_server(Some(0));
+    let (_server_thread, port1) = start_server(Some(0));
+    let (_server_thread, port2) = start_server(Some(0));
     // Wait until server started
     std::thread::sleep(Duration::from_millis(500));
     test_connection(port0);
