@@ -104,6 +104,12 @@ impl Platform for Std {
 
 pub struct SockAddr(libc::sockaddr_vm);
 
+impl SockAddr {
+    pub fn port(&self) -> u32 {
+        self.0.svm_port
+    }
+}
+
 #[cfg(feature="std")]
 impl From<SockAddr> for NixSockAddr {
     fn from(addr: SockAddr) -> NixSockAddr {
