@@ -352,11 +352,21 @@ impl<P: Platform> VsockListener<P> {
             Ok(())
         }
     }
+
+    pub fn as_raw_fd(&self) -> RawFd {
+        self.socket
+    }
+
+    pub fn into_raw_fd(self) -> RawFd {
+        let fd = self.socket;
+        mem::forget(self);
+        fd
+    }
 }
 #[cfg(feature="std")]
 impl AsRawFd for VsockListener {
     fn as_raw_fd(&self) -> RawFd {
-        self.socket
+        VsockListener::as_raw_fd(self)
     }
 }
 
@@ -370,9 +380,7 @@ impl FromRawFd for VsockListener {
 #[cfg(feature="std")]
 impl IntoRawFd for VsockListener {
     fn into_raw_fd(self) -> RawFd {
-        let fd = self.socket;
-        mem::forget(self);
-        fd
+        VsockListener::into_raw_fd(self)
     }
 }
 
