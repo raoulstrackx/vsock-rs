@@ -77,6 +77,7 @@ pub trait Platform {
 }
 
 #[cfg(feature="std")]
+#[derive(Debug, Clone)]
 pub struct Std;
 
 #[cfg(feature="std")]
