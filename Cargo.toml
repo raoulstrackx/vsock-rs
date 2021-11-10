@@ -13,9 +13,9 @@ exclude = ["test_fixture"]
 [dependencies]
 compiler_builtins = { version = '0.1.2', optional = true }
 core = { version = '1.0.0', optional = true, package = 'rustc-std-workspace-core' }
-libc = { version = "0.2.79", optional = true, default-features = false, features = ["rustc-std-workspace-core"] }
+libc = { git = "https://github.com/fortanix/libc.git", branch = "fortanixvme", default-features = false, features = ["rustc-std-workspace-core"] }
 nix = { version = "0.22.1", optional = true }
-getrandom = { version = "0.2.3", optional = true, default-features = false }
+getrandom = { git = "https://github.com/raoulstrackx/getrandom.git", branch = "raoul/fortanixvme_target", optional = true, default-features = false }
 
 [dev-dependencies]
 rand = "0.8.3"
@@ -28,3 +28,6 @@ default = ["std", "random_port"]
 random_port = ["getrandom"]
 rustc-dep-of-std = ["core", "compiler_builtins", "getrandom/rustc-dep-of-std", "libc/rustc-std-workspace-core"]
 std = ["libc/std", "nix"]
+
+[patch.crates-io]
+libc = { git = "https://github.com/fortanix/libc.git", branch = "fortanixvme" }
