@@ -854,7 +854,7 @@ pub fn get_local_cid() -> Result<u32, io::Error> {
 fn rand_ports() {
     let mut ports = Vec::new();
     for _i in 0..1000 {
-        let port = VsockListener::<Std>::gen_rand_port().unwrap();
+        let port = Vsock::gen_rand_port().unwrap();
         assert!(MAX_PRIVILEGED_PORT < port);
         assert!(ports.iter().all(|p| *p != port));
         ports.push(port);
