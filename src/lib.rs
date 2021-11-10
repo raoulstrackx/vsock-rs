@@ -238,8 +238,8 @@ impl<P: Platform> VsockListener<P> {
     #[cfg(feature="random_port")]
     pub fn bind_with_cid(cid: u32) -> Result<VsockListener<P>, Error> {
         fn bind_with_cid_ex<P: Platform>(cid: u32, retries: u32) -> Result<VsockListener<P>, Error> {
-            let listener = VsockListener::<P>::gen_rand_port().
-                                and_then(|port| VsockListener::<P>::bind_with_cid_port(cid, port));
+            let listener = VsockListener::<P>::gen_rand_port()
+                .and_then(|port| VsockListener::<P>::bind_with_cid_port(cid, port));
             match listener {
                 Ok(listener)           => Ok(listener),
                 Err(e) if retries == 0 => Err(e),
