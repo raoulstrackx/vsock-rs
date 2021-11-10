@@ -144,3 +144,15 @@ fn test_loopback() {
     test_connection(port);
     test_connection(port);
 }
+
+#[test]
+fn test_loopback_rand_port() {
+    let (_server_thread, port0) = start_server(0);
+    let (_server_thread, port1) = start_server(0);
+    let (_server_thread, port2) = start_server(0);
+    // Wait until server started
+    std::thread::sleep(Duration::from_millis(500));
+    test_connection(port0);
+    test_connection(port1);
+    test_connection(port2);
+}
