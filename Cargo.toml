@@ -15,7 +15,7 @@ compiler_builtins = { version = '0.1.2', optional = true }
 core = { version = '1.0.0', optional = true, package = 'rustc-std-workspace-core' }
 libc = { git = "https://github.com/fortanix/libc.git", branch = "fortanixvme", default-features = false, features = ["rustc-std-workspace-core"] }
 nix = { version = "0.22.1", optional = true }
-getrandom = { git = "https://github.com/raoulstrackx/getrandom.git", branch = "raoul/fortanixvme_target", optional = true, default-features = false }
+getrandom = { git = "https://github.com/fortanix/getrandom.git", branch = "fortanixvme", optional = true, default-features = false }
 
 [dev-dependencies]
 rand = "0.8.3"
