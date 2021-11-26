@@ -113,6 +113,10 @@ impl Platform for Std {
 pub struct SockAddr(libc::sockaddr_vm);
 
 impl SockAddr {
+    pub fn from_raw_fd<P: Platform>(fd: RawFd) -> Result<SockAddr, Error> {
+        socket_addr::<P>(fd)
+    }
+
     pub fn port(&self) -> u32 {
         self.0.svm_port
     }
