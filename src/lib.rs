@@ -49,6 +49,8 @@ use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 const MAX_PRIVILEGED_PORT: u32 = 1023;
 #[cfg(feature="random_port")]
 const BIND_RETRIES: u32 = 10;
+#[cfg(not(feature="random_port"))]
+const BIND_RETRIES: u32 = 0;
 
 #[cfg(not(feature="std"))]
 pub enum Shutdown {
@@ -110,7 +112,12 @@ impl Platform for Std {
     }
 }
 
+#[cfg(feature="std")]
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
+pub struct SockAddr(libc::sockaddr_vm);
+
+#[cfg(not(feature="std"))]
+#[derive(Clone)]
 pub struct SockAddr(libc::sockaddr_vm);
 
 impl SockAddr {
