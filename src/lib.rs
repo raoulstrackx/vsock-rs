@@ -14,10 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+//! Virtio socket support for Rust.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-
-//! Virtio socket support for Rust.
+#![deny(warnings)]
 
 use core::mem;
 use core::fmt::{Display, Error as FmtError, Formatter};
@@ -49,6 +49,8 @@ use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, RawFd};
 const MAX_PRIVILEGED_PORT: u32 = 1023;
 #[cfg(feature="random_port")]
 const BIND_RETRIES: u32 = 10;
+#[cfg(not(feature="random_port"))]
+const BIND_RETRIES: u32 = 0;
 
 #[cfg(not(feature="std"))]
 pub enum Shutdown {
@@ -110,7 +112,7 @@ impl Platform for Std {
     }
 }
 
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "std", derive(Debug, Eq, Hash, PartialEq))]
 pub struct SockAddr(libc::sockaddr_vm);
 
 impl SockAddr {
@@ -859,7 +861,7 @@ pub fn get_local_cid() -> Result<u32, io::Error> {
 }
 
 #[test]
-#[cfg(feature="random_port")]
+#[cfg(all(features="std", feature="random_port"))]
 fn rand_ports() {
     let mut ports = Vec::new();
     for _i in 0..1000 {

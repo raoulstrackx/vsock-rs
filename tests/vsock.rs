@@ -14,17 +14,28 @@
  * limitations under the License.
  */
 
-use nix::sys::socket::VsockAddr;
-use nix::sys::socket::{SockAddr as NixSockAddr};
-use rand::RngCore;
-use serde::{Serialize, Deserialize};
-use sha2::{Digest, Sha256};
-use std::time::Duration;
-use std::thread::{self, JoinHandle};
-use std::io::Write;
-use vsock::{get_local_cid, Std, VsockListener, VsockStream, VMADDR_CID_HOST, VMADDR_CID_LOCAL};
+#[cfg(feature="std")]
+use {
+    nix::sys::socket::{SockAddr as NixSockAddr},
+    std::time::Duration,
+    std::thread::{self, JoinHandle},
+    std::io::Write,
+    vsock::{Std, VsockListener, VsockStream, VMADDR_CID_LOCAL},
+};
 
+#[cfg(feature="test_vm")]
+use {
+    nix::sys::socket::VsockAddr,
+    rand::RngCore,
+    sha2::{Digest, Sha256},
+    vsock::{get_local_cid, VMADDR_CID_HOST},
+};
+
+use serde::{Serialize, Deserialize};
+
+#[cfg(feature="test_vm")]
 const TEST_BLOB_SIZE: usize = 1_000_000;
+#[cfg(feature="test_vm")]
 const TEST_BLOCK_SIZE: usize = 5_000;
 
 /// A simple test for the vsock implementation.
@@ -34,6 +45,7 @@ const TEST_BLOCK_SIZE: usize = 5_000;
 /// vsock implementation does not introduce corruption and properly implements the interface
 /// semantics.
 #[test]
+#[cfg(all(feature = "test_vm", feature="std"))]
 fn test_vsock() {
     let mut rng = rand::thread_rng();
     let mut blob: Vec<u8> = vec![];
@@ -45,7 +57,6 @@ fn test_vsock() {
     rng.fill_bytes(&mut blob);
 
     let stream =
-        //VsockStream::<Std>::connect(&NixSockAddr::Vsock(VsockAddr::new(3, 8000)).try_into().unwrap()).expect("connection failed");
         VsockStream::<Std>::connect_with_vsock_addr(&VsockAddr::new(3, 8000)).expect("connection failed");
 
     while tx_pos < TEST_BLOB_SIZE {
@@ -75,6 +86,7 @@ fn test_vsock() {
 }
 
 #[test]
+#[cfg(all(feature = "test_vm", feature="std"))]
 fn test_get_local_cid() {
     assert_eq!(get_local_cid().unwrap(), VMADDR_CID_HOST);
 }
@@ -89,6 +101,7 @@ struct Response {
     message: String,
 }
 
+#[cfg(feature="std")]
 fn handle_connection(stream: &mut VsockStream) {
     let mut buff = [0u8; 100];
     let n = stream.read(&mut buff).unwrap();
@@ -99,6 +112,7 @@ fn handle_connection(stream: &mut VsockStream) {
     stream.write_all(&serde_cbor::ser::to_vec(&resp).expect("serialization error")).unwrap();
 }
 
+#[cfg(feature="std")]
 fn start_server(port: u32) -> (JoinHandle<()>, u32) {
     let listener = VsockListener::bind_with_cid_port(VMADDR_CID_LOCAL, port).unwrap();
     let port = if let NixSockAddr::Vsock(vsock) = listener.local_addr().unwrap().into() {
@@ -121,6 +135,7 @@ fn start_server(port: u32) -> (JoinHandle<()>, u32) {
     (handle, port)
 }
 
+#[cfg(feature="std")]
 fn test_connection(port: u32) {
     let mut client = VsockStream::<Std>::connect_with_cid_port(VMADDR_CID_LOCAL, port).unwrap();
     let req = Request {
@@ -136,6 +151,7 @@ fn test_connection(port: u32) {
 }
 
 #[test]
+#[cfg(feature="std")]
 fn test_loopback() {
     let (_server_thread, port) = start_server(3000);
     // Wait until server started
@@ -146,6 +162,7 @@ fn test_loopback() {
 }
 
 #[test]
+#[cfg(feature="std")]
 fn test_loopback_rand_port() {
     let (_server_thread, port0) = start_server(0);
     let (_server_thread, port1) = start_server(0);
