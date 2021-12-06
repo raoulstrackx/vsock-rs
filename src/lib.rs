@@ -14,10 +14,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+//! Virtio socket support for Rust.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-
-//! Virtio socket support for Rust.
+#[deny(warnings)]
 
 use core::mem;
 use core::fmt::{Display, Error as FmtError, Formatter};
@@ -866,7 +866,7 @@ pub fn get_local_cid() -> Result<u32, io::Error> {
 }
 
 #[test]
-#[cfg(feature="random_port")]
+#[cfg(all(features="std", feature="random_port"))]
 fn rand_ports() {
     let mut ports = Vec::new();
     for _i in 0..1000 {

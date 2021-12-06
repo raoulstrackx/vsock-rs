@@ -28,6 +28,8 @@ default = ["std", "random_port"]
 random_port = ["getrandom"]
 rustc-dep-of-std = ["core", "compiler_builtins", "getrandom/rustc-dep-of-std", "libc/rustc-std-workspace-core"]
 std = ["libc/std", "nix"]
+# Feature only used include/exclude tests that rely on a test VM (see ./README.md)
+test_vm = []
 
 [patch.crates-io]
 libc = { git = "https://github.com/fortanix/libc.git", branch = "fortanixvme" }
