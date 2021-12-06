@@ -17,7 +17,7 @@
 //! Virtio socket support for Rust.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#[deny(warnings)]
+#![deny(warnings)]
 
 use core::mem;
 use core::fmt::{Display, Error as FmtError, Formatter};
@@ -112,12 +112,7 @@ impl Platform for Std {
     }
 }
 
-#[cfg(feature="std")]
-#[derive(Debug, Clone, Eq, Hash, PartialEq)]
-pub struct SockAddr(libc::sockaddr_vm);
-
-#[cfg(not(feature="std"))]
-#[derive(Clone)]
+#[cfg_attr(feature = "std", derive(Debug, Eq, Hash, PartialEq))]
 pub struct SockAddr(libc::sockaddr_vm);
 
 impl SockAddr {

@@ -14,25 +14,24 @@
  * limitations under the License.
  */
 
-#[cfg(feature="test_vm")]
-use nix::sys::socket::VsockAddr;
 #[cfg(feature="std")]
-use nix::sys::socket::{SockAddr as NixSockAddr};
+use {
+    nix::sys::socket::{SockAddr as NixSockAddr},
+    std::time::Duration,
+    std::thread::{self, JoinHandle},
+    std::io::Write,
+    vsock::{Std, VsockListener, VsockStream, VMADDR_CID_LOCAL},
+};
+
 #[cfg(feature="test_vm")]
-use rand::RngCore;
+use {
+    nix::sys::socket::VsockAddr,
+    rand::RngCore,
+    sha2::{Digest, Sha256},
+    vsock::{get_local_cid, VMADDR_CID_HOST},
+};
+
 use serde::{Serialize, Deserialize};
-#[cfg(feature="test_vm")]
-use sha2::{Digest, Sha256};
-#[cfg(feature="std")]
-use std::time::Duration;
-#[cfg(feature="std")]
-use std::thread::{self, JoinHandle};
-#[cfg(feature="std")]
-use std::io::Write;
-#[cfg(feature="std")]
-use vsock::{Std, VsockListener, VsockStream, VMADDR_CID_LOCAL};
-#[cfg(feature="test_vm")]
-use vsock::{get_local_cid, VMADDR_CID_HOST};
 
 #[cfg(feature="test_vm")]
 const TEST_BLOB_SIZE: usize = 1_000_000;
