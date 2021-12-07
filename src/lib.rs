@@ -112,6 +112,7 @@ impl Platform for Std {
     }
 }
 
+#[derive(Clone)]
 #[cfg_attr(feature = "std", derive(Debug, Eq, Hash, PartialEq))]
 pub struct SockAddr(libc::sockaddr_vm);
 
