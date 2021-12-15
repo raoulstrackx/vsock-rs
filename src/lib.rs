@@ -121,6 +121,10 @@ impl SockAddr {
         socket_addr::<P>(fd)
     }
 
+    pub fn peer_from_raw_fd<P: Platform>(fd: RawFd) -> Result<SockAddr, Error> {
+        peer_addr::<P>(fd)
+    }
+
     pub fn new(cid: u32, port: u32) -> Self {
         SockAddr(new_socket_addr(cid, port))
     }
@@ -406,6 +410,29 @@ fn socket_addr<P: Platform>(socket: RawFd) -> Result <SockAddr, Error> {
     let mut vsock_addr_len = mem::size_of::<sockaddr_vm>() as socklen_t;
     if unsafe {
         getsockname(
+            socket,
+            &mut vsock_addr as *mut _ as *mut sockaddr,
+            &mut vsock_addr_len,
+        )
+    } < 0
+    {
+        Err(P::last_os_error())
+    } else {
+        Ok(SockAddr(vsock_addr))
+    }
+}
+
+fn peer_addr<P: Platform>(socket: RawFd) -> Result <SockAddr, Error> {
+    let mut vsock_addr = sockaddr_vm {
+        svm_family: AF_VSOCK as sa_family_t,
+        svm_reserved1: 0,
+        svm_port: 0,
+        svm_cid: 0,
+        svm_zero: [0u8; 4],
+    };
+    let mut vsock_addr_len = mem::size_of::<sockaddr_vm>() as socklen_t;
+    if unsafe {
+        getpeername(
             socket,
             &mut vsock_addr as *mut _ as *mut sockaddr,
             &mut vsock_addr_len,
