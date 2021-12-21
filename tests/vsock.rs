@@ -20,7 +20,8 @@ use {
     std::time::Duration,
     std::thread::{self, JoinHandle},
     std::io::Write,
-    vsock::{Std, VsockListener, VsockStream, VMADDR_CID_LOCAL},
+    std::os::unix::io::AsRawFd,
+    vsock::{Error, Std, SockAddr, VsockListener, VsockStream, VMADDR_CID_LOCAL},
 };
 
 #[cfg(feature="test_vm")]
@@ -115,6 +116,8 @@ fn handle_connection(stream: &mut VsockStream) {
 #[cfg(feature="std")]
 fn start_server(port: u32) -> (JoinHandle<()>, u32) {
     let listener = VsockListener::bind_with_cid_port(VMADDR_CID_LOCAL, port).unwrap();
+    assert_eq!(SockAddr::from_raw_fd::<Std>(listener.as_raw_fd()).unwrap(), listener.local_addr().unwrap());
+    assert_eq!(SockAddr::peer_from_raw_fd::<Std>(listener.as_raw_fd()).unwrap_err(), Error::SystemError(107));
     let port = if let NixSockAddr::Vsock(vsock) = listener.local_addr().unwrap().into() {
         vsock.port()
     } else {
@@ -124,7 +127,8 @@ fn start_server(port: u32) -> (JoinHandle<()>, u32) {
     let handle = thread::Builder::new().spawn(move || {
         let listener = listener;
         loop {
-            let (stream, _addr) = listener.accept().unwrap();
+            let (stream, peer_addr) = listener.accept().unwrap();
+            assert_eq!(SockAddr::peer_from_raw_fd::<Std>(stream.as_raw_fd()).unwrap(), peer_addr);
             let _ = thread::Builder::new()
                 .spawn(move || {
                     let mut stream = stream;
